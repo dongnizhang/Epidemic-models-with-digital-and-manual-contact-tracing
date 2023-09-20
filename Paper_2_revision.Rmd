@@ -1,0 +1,862 @@
+---
+title: "comparison and combination of manual and app-based digital CT"
+author: "Dongni Zhang"
+date: "Sep,2022"
+output: html_document
+---
+
+
+```{r include=FALSE}
+# include packages
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(ggplot2)
+#install.packages("pracma")
+library(pracma)#AUC
+library(rootSolve)
+#library(sparsevar)
+library(cowplot)
+library(metR)
+library(scales)
+library("RColorBrewer")
+library(gridExtra)
+```
+
+
+```{r} 
+######################################################
+# Epidemic (homogeneous mixing)
+# transmission rate: beta
+# rate of recovery: gamma
+# rate of diagnosis: delta
+######################################################
+
+# basic reproduction number (without any intervention)
+R0 = beta/gamma
+R0
+
+# reproduction number (without any CT but with testing)
+R = beta/(gamma+delta)
+R 
+```
+
+## Digital Tracing only: 
+
+```{r}
+######################################################
+# Digital tracing: (iterative, full tracing, without delay)
+# fraction of using app and following the advice: p_A
+######################################################
+# two-type branching process:
+# type 1: non-app-users
+# type 2: app-component
+# reproduction number for the branching process: R_D
+######################################################
+######################################################
+
+R_D = function(beta,gamma,delta, p_A){
+  
+  # elements of the next generation matrix M: 
+  
+  m11 = (beta * (1- p_A))/ (gamma + delta)
+  m22 = 0 
+  trace_M = m11 + m22
+  m21 = (beta * p_A)/ (gamma + delta)
+  
+  x = beta*p_A-gamma-delta + sqrt((beta*p_A+gamma+delta)^2-4*beta*p_A*gamma)
+  m12 = ((1-p_A)*x)/(2*p_A*delta)
+  
+  det_M = (-1)*m12*m21
+  
+  return(trace_M/2+sqrt((trace_M/2)^2-det_M))
+  
+  
+}
+
+######################################################
+# Individual reproduction number: 
+# average infections produced by one typical infected
+######################################################
+
+R_D_ind = function(beta,p_A,delta,gamma){
+  
+  R0 = beta/(delta+gamma)
+  x = beta*p_A-gamma-delta + sqrt((beta*p_A+gamma+delta)^2-4*beta*p_A*gamma)
+  f = ((1-p_A)*x)/(2*p_A*delta)
+  N_c = f/(beta*(1-p_A)/(beta*p_A+gamma+delta))
+  mu = 1+ (beta*p_A)/(beta*p_A+gamma+delta) * N_c
+  result1 = p_A* (f+mu-1)/(mu)
+  result2 = (1-p_A)*R0
+  
+  return(result1+result2)
+  
+}
+```
+
+## Manual Tracing only: 
+
+```{r}
+######################################################
+# Manual tracing: (iterative, full tracing, without delay)
+# probability of being traced: p 
+######################################################
+# single-type branching process of CT-components
+# Component Reproduction number R_m:
+# the average number of new components produced by one component
+######################################################
+######################################################
+R_M = function(beta,gamma,delta,p){
+  
+   x = beta*p-gamma-delta + sqrt((beta*p+gamma+delta)^2-4*beta*p*gamma)
+   f = ((1-p)*x)/(2*p*delta)
+  
+  return(f)
+  
+}
+
+######################################################
+# individual reproduction number: 
+# average infections produced by one typical infected
+######################################################
+
+R_M_ind = function(beta,p,delta,gamma){
+  
+  x = beta*p-gamma-delta + sqrt((beta*p+gamma+delta)^2-4*beta*p*gamma)
+  f = ((1-p)*x)/(2*p*delta)
+  N_c = f/(beta*(1-p)/(beta*p+gamma+delta))
+  mu = 1+ (beta*p)/(beta*p+gamma+delta) * N_c
+  result1 = (f+mu-1)/(mu)
+  return(result1)
+  }
+
+```
+
+# Prepare for the heatpmap for R_{D}
+```{r}
+n_grid = 100
+# the probability of using app varying in 
+p_app_seq = seq(0.01,0.99,length.out=n_grid)
+#p_app_seq
+# the testing fraction varying in 
+test_fraction = seq(0.01,5/6,length.out=n_grid)
+
+R_app_m=matrix(nrow = n_grid,ncol = n_grid)
+
+for (k in (1:n_grid)) {
+  p = p_app_seq[k]
+  for (j in (1:n_grid)) {
+  delta = test_fraction[j]/(1-test_fraction[j]) *gamma
+  R = R_D(beta = 6/7, delta=delta,gamma=1/7,p_A=p)
+  R_app_m[j,k] = R
+  }
+}
+```
+
+# Prepare for the heatmap for individual R_D_ind
+```{r}
+
+R_ind_app_m=matrix(nrow = n_grid,ncol = n_grid)
+
+for (k in (1:n_grid)) {
+  p = p_app_seq[k]
+  for (j in (1:n_grid)) {
+  delta = test_fraction[j]/(1-test_fraction[j]) *gamma
+  R = R_D_ind(beta = 6/7, delta=delta,gamma=1/7,p_A=p)
+  R_ind_app_m[j,k] = R
+  }
+}
+
+```
+
+## Compare the two reproduction numbers R_D and R_D_ind: 
+```{r}
+pi_vector = seq(0.01,0.99,0.01)
+R_D_vec = R_D(beta=6/7,p_A=pi_vector,delta=1/7,gamma=1/7)
+R_indD_vec = R_D_ind(beta=6/7,p_A=pi_vector,delta=1/7,gamma=1/7)
+data_R_D = data.frame(pi_vector,R_D_vec)
+data_R_indD = data.frame(pi_vector,R_indD_vec)
+
+# find when pi=?
+R_1 =function(x){
+  1-R_D(beta=6/7,p_A=x,delta=1/7,gamma=1/7)
+}
+# find when pi=? R_ind = 1
+R_ind_1 =function(x){
+  1-R_D_ind(beta=6/7,p_A=x,delta=1/7,gamma=1/7)
+}
+
+pi_c = uniroot.all(R_ind_1, c(0,1))
+#or pi_c = uniroot.all(R_1, c(0,1))
+
+ggplot(data_R_D,aes(y=R_D_vec,x= pi_vector))+
+  geom_line(aes(color = "R_D"))+
+  geom_line(aes(y=R_indD_vec,color = "R_(ind)_D"))+
+  labs(color="",x="app-using fraction pi", 
+       y="reproduction number",
+       title="")+
+  geom_vline(xintercept = pi_c, linetype = "dashed")+
+  geom_hline(yintercept = 1, linetype = "dashed")+
+  theme(text = element_text(size=14))+
+  annotate("text", y=0,x=pi_c-0.04,label = "pi_c",
+           color="black",size = 4,fontface="bold",angle=0)+
+  annotate("pointrange", y=1,x=pi_c,ymin = 0, ymax = 0,
+           olour = "black", size = 0.2)
+
+
+```
+
+
+## Compare Manual CT and Digital CT 
+```{r}
+n_grid = 100
+# the testing fraction varying in 
+test_fraction = seq(0.01,5/6,length.out=n_grid)
+################### Digital CT#################################
+pi_vec_1 = c()
+
+for (i in 1: (n_grid-1)){ 
+  
+  R1_a =function(pi){
+    1-R_D(beta = 6/7, delta=test_fraction[i]/(1-test_fraction[i]) *gamma,
+          gamma=1/7,p_A=pi)
+  }
+  pi_vec_1 = c(pi_vec_1,uniroot.all(R1_a, c(0,1)))
+  
+}
+# we know that for delta=5/7, already R0=1, we dont need manual CT, i.e. pi=0
+pi_vec_1 = c(pi_vec_1,0)
+
+# summarize the data 
+data.app = data.frame(test_fraction,pi_vec_1)
+colnames(data.app)[2] <- "probability"
+
+pi_sq = c()
+
+for (i in 1: (n_grid-1)){ 
+  
+  R1_a =function(pi){
+    1-R_D(beta = beta, delta=test_fraction[i]/(1-test_fraction[i]) *gamma,
+          gamma=gamma,p_A=pi)
+  }
+  solution = uniroot.all(R1_a, c(0,1))
+  pi_sq = c(pi_sq,solution^2)
+  
+}
+# for delta = 5/7, we know R_A=1 when p=0
+pi_sq = c(pi_sq,0)
+
+data.app.sq = data.frame(test_fraction,pi_sq)
+colnames(data.app.sq)[2] <- "probability"
+
+################### Manual CT#################################
+
+p_vec_1 = c()
+
+for (i in 1: (n_grid-1)){ 
+  
+  R1_m =function(p_c){
+    1-R_M(beta = beta, delta=test_fraction[i]/(1-test_fraction[i]) *gamma,gamma=gamma,p=p_c)
+  }
+  p_vec_1 = c(p_vec_1,uniroot.all(R1_m, c(0,1)))
+  
+}
+# for delta = 5/7, we know R_M=1 when p=0 
+p_vec_1 = c(p_vec_1,0)
+# summarize the data 
+data.manual = data.frame(test_fraction,p_vec_1)
+colnames(data.manual)[2] <- "probability"
+
+# plot the data 
+# Effective combination of testing and manual/App tracing: pi and p 
+ggplot(data.manual,aes(y = test_fraction, x= probability))+
+  geom_line(aes(color="R_M = 1"))+
+  geom_line(data=data.app,aes(color="R_D = 1"))+
+  labs(color="",x="pi or p", 
+       y="delta/(delta+gamma)",
+       title="")+
+  theme(text = element_text(size=14))+
+  theme(legend.position="none")
+
+# plot the data 
+# Effective combination of testing and manual/App tracing: pi^2 and p 
+ggplot(data.manual,aes(y = test_fraction, x= probability))+
+  geom_line(aes(color="R_M = 1"))+
+  geom_line(data=data.app.sq,aes(color="R_D = 1"))+
+  labs(color="",x="pi^2 or p", 
+       y="delta/(delta+gamma)",
+       title="")+
+  theme(text = element_text(size=14))
+```
+
+
+## Combination of manual and Digital CT 
+
+# First, the process of  N(t)
+```{r}
+# input: 
+# size of the component starts by number of app-users = i,  number of non-app-users = j
+# p: probability of successful manual contact tracing
+# p_A: probability of using a tracing app and following the advice
+
+# output: 
+# data contaning the number of app-users, non-app-users at each event time   
+# size of the component starts by number of app-users = i,  number of non-app-users = j
+# 
+beta = 6/7
+gamma= 1/7
+
+delta= 1/7
+# so that delta/(delta+gamma) = 1/2
+
+N_c <- function(i,j,p,p_A){
+  
+  time = c(0)
+  n_app_users = c(i)
+  n_nonapp_users = c(j)
+  
+  
+  N_1t = i
+  N_2t = j
+  
+  while (N_1t+N_2t > 0) {
+    
+    # the rates of five events
+    r1 = N_1t * beta * p_A + N_2t * beta * p_A * p
+    r2 = (N_1t + N_2t) * beta * (1-p_A)  * p
+    r3 = (N_1t ) * gamma
+    r4 = (N_2t ) * gamma
+    r5 = (N_1t+ N_2t) * delta
+    
+    # new event time 
+    rate = r1+r2+r3+r4+r5
+    t_event = time[length(time)] + rexp(1, rate)
+    time = c(time,t_event)
+    
+    # decide which event 
+    rd = runif(1)
+    
+    if ( rd < r1/rate) {
+# new infection to app-user 
+      N_1t = N_1t + 1
+      N_2t = N_2t + 0
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+      
+} else if ( rd >= r1/rate & rd < (r1+r2)/rate) {
+# new infection to non-app-user 
+      N_1t = N_1t + 0
+      N_2t = N_2t + 1
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+} else if ( rd >= (r1+r2)/rate & rd < (r1+r2+r3)/rate) {
+# natural recovery of app-user 
+      N_1t = N_1t - 1
+      N_2t = N_2t + 0
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+} else if ( rd >= (r1+r2+r3)/rate & rd < (r1+r2+r3+r4)/rate) {
+# natural recovery of non-app-user 
+      N_1t = N_1t + 0
+      N_2t = N_2t - 1
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+}else {
+# diagnosis of either non-app-user or app user
+      N_1t =  0
+      N_2t = 0
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+}
+    
+    
+    }
+  
+  data.component = data.frame(time,n_app_users,n_nonapp_users)
+  
+  return(data.component)
+  
+}
+```
+
+# Next, function to compute R_DM
+```{r}
+set.seed(123456)
+Reprod_DM <- function(p,p_A){
+
+# component with root as App-user (type-1 individual)
+# Area under curve of the number of type-2 individuals (Non-app-users) produced by such component
+AUC_N_2_C1 = c()
+# Area under curve of number of type-1 individuals (app-users) produced by such component
+AUC_N_1_C1 = c()
+
+# run 10000 simulations
+for (k in (1:10000)) {
+  data_component_a = N_c(i = 1,j = 0,p = p,p_A = p_A)
+  cuts = data_component_a$time
+  vals_1 = data_component_a$n_app_users
+  AUC_1 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_1[i]*t_interval
+  AUC_1 = AUC_1 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_1_C1 = c(AUC_N_1_C1,AUC_1)
+  
+  vals_2 = data_component_a$n_nonapp_users
+  AUC_2 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_2[i]*t_interval
+  AUC_2 = AUC_2 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_2_C1 = c(AUC_N_2_C1,AUC_2)
+                 
+  
+}
+
+
+# component with root as non-App-user (type-2 individual)
+# Area under curve of the number of type-2 individuals (Non-app-users) produced by such component
+AUC_N_2_C2 = c()
+# Area under curve of number of type-1 individuals (app-users) produced by such component
+AUC_N_1_C2 = c()
+
+# run 10000 simulations
+for (k in (1:10000)) {
+  data_component_na = N_c(i = 0,j = 1,p = p,p_A = p_A)
+  cuts = data_component_na$time
+  vals_1 = data_component_na$n_app_users
+  AUC_1 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_1[i]*t_interval
+  AUC_1 = AUC_1 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_1_C2 = c(AUC_N_1_C2,AUC_1)
+  
+  vals_2 = data_component_na$n_nonapp_users
+  AUC_2 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_2[i]*t_interval
+  AUC_2 = AUC_2 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_2_C2 = c(AUC_N_2_C2,AUC_2)
+                 
+  
+}
+
+# compute the next-generation matrix
+m_11 = mean(AUC_N_2_C1)*p_A*beta*(1-p)
+m_21 = mean(AUC_N_2_C2)*p_A*beta*(1-p)
+m_12 =(mean(AUC_N_2_C1)+mean(AUC_N_1_C1))*(1-p_A)*beta*(1-p)
+m_22 =(mean(AUC_N_2_C2)+mean(AUC_N_1_C2))*(1-p_A)*beta*(1-p)
+
+# compute the largest eigenvalue of next-generation matrix
+
+
+tr_M = m_11+m_22
+
+det_M = m_11*m_22 - m_12*m_21
+
+  
+return(tr_M/2+sqrt((tr_M/2)^2-det_M))
+
+}
+
+```
+
+# Get ready for heatmap of R_DM
+```{r}
+n_grid = 100
+
+# pi takes values in 
+p_app_seq = seq(0,0.99, length.out=n_grid)
+#p_app_seq # increment size with 0.99/99=0.01
+
+# p takes values in 
+p_manual_seq = seq(0,0.99, length.out=n_grid)
+
+# store the R_DM values in a matrix:
+R_DM_m=matrix(nrow = n_grid,ncol = n_grid)
+```
+
+
+```{r}
+# start compute R_DM for each combination of p and pi
+
+for (k in (1:n_grid)) {
+  
+  p_A = p_app_seq[k]
+  
+  for (j in (1:n_grid)) {
+    
+  p = p_manual_seq[j] 
+  
+  set.seed(123456)
+  
+  R = Reprod_DM(p=p, p_A=p_A)
+  
+  R_DM_m[j,k] = R
+  
+  }
+}
+
+```
+
+## If we choose small testing fraction 0.2:
+```{r}
+beta=6/7
+gamma=1/7
+# choose small delta 
+delta_s = 1/28
+# the testing fraction
+#delta_s/(delta_s+gamma)
+delta=delta_s
+
+# Now : R_0 = 4.8
+# first, the process of  N(t)
+
+# input: 
+# size of the component starts by number of app-users = i,  number of non-app-users = j
+# p: probability of successful manual contact tracing
+# p_A: probability of using a tracing app and following the advice
+
+# output: 
+# data contaning the number of app-users, non-app-users at each event time   
+# size of the component starts by number of app-users = i,  number of non-app-users = j
+
+N_c <- function(i,j,p,p_A){
+  
+  time = c(0)
+  n_app_users = c(i)
+  n_nonapp_users = c(j)
+  
+  
+  N_1t = i
+  N_2t = j
+  
+  while (N_1t+N_2t > 0) {
+    
+    # the rates of five events
+    r1 = N_1t * beta * p_A + N_2t * beta * p_A * p
+    r2 = (N_1t + N_2t) * beta * (1-p_A)  * p
+    r3 = (N_1t ) * gamma
+    r4 = (N_2t ) * gamma
+    r5 = (N_1t+ N_2t) * delta
+    
+    # new event time 
+    rate = r1+r2+r3+r4+r5
+    t_event = time[length(time)] + rexp(1, rate)
+    time = c(time,t_event)
+    
+    # decide which event 
+    rd = runif(1)
+    
+    if ( rd < r1/rate) {
+# new infection to app-user 
+      N_1t = N_1t + 1
+      N_2t = N_2t + 0
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+      
+} else if ( rd >= r1/rate & rd < (r1+r2)/rate) {
+# new infection to non-app-user 
+      N_1t = N_1t + 0
+      N_2t = N_2t + 1
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+} else if ( rd >= (r1+r2)/rate & rd < (r1+r2+r3)/rate) {
+# natural recovery of app-user 
+      N_1t = N_1t - 1
+      N_2t = N_2t + 0
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+} else if ( rd >= (r1+r2+r3)/rate & rd < (r1+r2+r3+r4)/rate) {
+# natural recovery of non-app-user 
+      N_1t = N_1t + 0
+      N_2t = N_2t - 1
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+}else {
+# diagnosis of either non-app-user or app user
+      N_1t =  0
+      N_2t = 0
+      n_app_users = c(n_app_users,N_1t)
+      n_nonapp_users = c(n_nonapp_users,N_2t)
+}
+    
+    
+    }
+  
+  data.component = data.frame(time,n_app_users,n_nonapp_users)
+  
+  return(data.component)
+  
+}
+
+
+# next, function to compute R_DM
+
+set.seed(123456)
+Reprod_DM <- function(p,p_A){
+
+# component with root as App-user (type-1 individual)
+# Area under curve of the number of type-2 individuals (Non-app-users) produced by such component
+AUC_N_2_C1 = c()
+# Area under curve of number of type-1 individuals (app-users) produced by such component
+AUC_N_1_C1 = c()
+
+# run 10000 simulations
+for (k in (1:10000)) {
+  data_component_a = N_c(i = 1,j = 0,p = p,p_A = p_A)
+  cuts = data_component_a$time
+  vals_1 = data_component_a$n_app_users
+  AUC_1 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_1[i]*t_interval
+  AUC_1 = AUC_1 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_1_C1 = c(AUC_N_1_C1,AUC_1)
+  
+  vals_2 = data_component_a$n_nonapp_users
+  AUC_2 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_2[i]*t_interval
+  AUC_2 = AUC_2 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_2_C1 = c(AUC_N_2_C1,AUC_2)
+                 
+  
+}
+
+
+# component with root as non-App-user (type-2 individual)
+# Area under curve of the number of type-2 individuals (Non-app-users) produced by such component
+AUC_N_2_C2 = c()
+# Area under curve of number of type-1 individuals (app-users) produced by such component
+AUC_N_1_C2 = c()
+
+# run 10000 simulations
+for (k in (1:10000)) {
+  data_component_na = N_c(i = 0,j = 1,p = p,p_A = p_A)
+  cuts = data_component_na$time
+  vals_1 = data_component_na$n_app_users
+  AUC_1 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_1[i]*t_interval
+  AUC_1 = AUC_1 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_1_C2 = c(AUC_N_1_C2,AUC_1)
+  
+  vals_2 = data_component_na$n_nonapp_users
+  AUC_2 = 0
+  
+  for (i in (1:length(cuts))) {
+  t_interval = cuts[i+1] - cuts[i]
+  area = vals_2[i]*t_interval
+  AUC_2 = AUC_2 + area
+  
+  if (i+1==length(cuts)) break
+  }
+  
+  AUC_N_2_C2 = c(AUC_N_2_C2,AUC_2)
+                 
+  
+}
+
+# compute the next-generation matrix
+m_11 = mean(AUC_N_2_C1)*p_A*beta*(1-p)
+m_21 = mean(AUC_N_2_C2)*p_A*beta*(1-p)
+m_12 =(mean(AUC_N_2_C1)+mean(AUC_N_1_C1))*(1-p_A)*beta*(1-p)
+m_22 =(mean(AUC_N_2_C2)+mean(AUC_N_1_C2))*(1-p_A)*beta*(1-p)
+
+# compute the largest eigenvalue of next-generation matrix
+
+
+tr_M = m_11+m_22
+
+det_M = m_11*m_22 - m_12*m_21
+
+  
+return(tr_M/2+sqrt((tr_M/2)^2-det_M))
+
+}
+
+```
+
+# get ready for heatmap of R_DM
+```{r}
+n_grid = 100
+
+# pi takes values in 
+p_app_seq = seq(0,0.99, length.out=n_grid)
+#p_app_seq # increment size with 0.99/99=0.01
+
+# p takes values in 
+p_manual_seq = seq(0,0.99, length.out=n_grid)
+
+# store the R_DM values in a matrix:
+R_DM_ms=matrix(nrow = n_grid,ncol = n_grid)
+
+# start compute R_DM for each combination of p and pi
+
+for (k in (1:n_grid)) {
+  
+  p_A = p_app_seq[k]
+  
+  for (j in (1:n_grid)) {
+    
+  p = p_manual_seq[j] 
+  
+  set.seed(123456)
+  
+  R = Reprod_DM(p=p, p_A=p_A)
+  
+  R_DM_ms[j,k] = R
+  
+  }
+}
+```
+## Plot the heatmaps for R_D, R_D_ind, R_comb
+
+```{r}
+
+# store all data for heatmaps in a data frame
+data_all_D <- expand.grid(testing=test_fraction,app_prob=p_app_seq)
+data_all_D$R_D <-c(R_app_m)
+data_all_D$R_ind_D <-c(R_ind_app_m)
+
+data_all_DM <- expand.grid(manual_prob=p_manual_seq,app_prob=p_app_seq)
+data_all_DM$R_DM = c(R_DM_m)
+data_all_DM$R_DM_s = c(R_DM_ms)
+```
+
+
+```{r}
+# heatmap for R_D
+plot_1 <- ggplot(data_all_D, aes(x=app_prob,y=testing,fill=R_D))+ 
+geom_tile()+
+labs(title="", y="delta/(delta+gamma)", x="app-using fraction pi")+
+scale_fill_distiller(palette = "Spectral",
+                     limits = c(0,max(data_all_D$R_D)),
+                     "reproduction\nnumber")+
+# set contour breaks at desired level 
+geom_contour(aes(z = R_D), breaks = 1, col = 'azure',size = 0.5)+
+geom_contour(aes(z = R_D), breaks = 10, col = 'black',size = 0.5,linetype ="dashed")+
+theme(plot.title = element_text(hjust = 0.5
+                                #,face="bold"
+                                ))+
+theme(text = element_text(size=14))+
+geom_text_contour(aes(z = R_D), stroke = 0.1,breaks=1,
+                  label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_D), stroke = 0.1,breaks=10,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))
+
+# heatmap for R_D_ind
+plot_2 <-ggplot(data_all_D, aes(x=app_prob,y=testing,fill=R_ind_D))+ 
+geom_tile()+
+labs(title="", y="delta/(delta+gamma)", x="app-using fraction pi")+
+scale_fill_distiller(palette = "Spectral",direction=-1,
+                     limits = c(0,max(data_all_D$R_D)),
+                     "reproduction\nnumber")+
+# set contour breaks at desired level 
+geom_contour(aes(z = R_ind_D), breaks = 1, col = 'azure',size = 0.5)+
+geom_contour(aes(z = R_ind_D), breaks = 1.5, col = 'black',size = 0.5,linetype ="dashed")+
+geom_contour(aes(z = R_ind_D), breaks = 2, col = 'black',size = 0.5,linetype ="dashed")+
+geom_contour(aes(z = R_ind_D), breaks = 2.5, col = 'black',size = 0.5,linetype ="dashed")+  
+theme(plot.title = element_text(hjust = 0.5
+                                #,face="bold"
+                                ))+
+theme(text = element_text(size=14))+
+geom_text_contour(aes(z = R_ind_D), stroke = 0.1,breaks=1,
+                  label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_ind_D), stroke = 0.1,breaks=1.5,
+                  label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_ind_D), stroke = 0.1,breaks=2,
+                  label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_ind_D), stroke = 0.1,breaks=2.5,
+                  label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+ 
+theme(legend.position="none")
+
+# heatmap for R_DM
+plot_3 <-ggplot(data_all_DM, aes(y=app_prob,x=manual_prob,fill=R_DM))+ 
+geom_tile()+
+labs(title="", y="app-using fraction pi", x="manual reporting probability p")+
+scale_fill_distiller(palette = "Spectral",
+                     limits = c(0,max(data_all_D$R_D)),
+                     "R_DM")+
+# set contour breaks at desired level
+geom_contour(aes(z = R_DM), breaks = 1, col = 'azure',size = 0.5)+
+geom_contour(aes(z = R_DM), breaks = 1.5, col = 'black',size = 0.5,linetype ="dashed")+
+geom_contour(aes(z = R_DM), breaks = 2, col = 'black',size = 0.5,linetype ="dashed")+
+geom_contour(aes(z = R_DM), breaks = 2.5, col = 'black',size = 0.5,linetype ="dashed")+  
+#theme(plot.title = element_text(hjust = 0.5,face="bold"))+
+theme(text = element_text(size=14))+
+geom_text_contour(aes(z = R_DM), stroke = 0.1,breaks=1,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_DM), stroke = 0.1,breaks=1.5,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_DM), stroke = 0.1,breaks=2,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_DM), stroke = 0.1,breaks=2.5,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+ 
+theme(legend.position="none")
+
+# heatmap for R_DM_s when small delta
+plot_4 <-ggplot(data_all_DM, aes(y=app_prob,x=manual_prob,fill=R_DM_s))+ 
+geom_tile()+
+labs(title="", y="app-using fraction pi", x="manual reporting probability p")+
+scale_fill_distiller(palette = "Spectral",
+                     limits = c(0,max(data_all_D$R_D)),
+                     "R_DM")+
+# set contour breaks at desired level 
+geom_contour(aes(z = R_DM_s), breaks = 1, col = 'azure',size = 0.5)+
+geom_contour(aes(z = R_DM_s), breaks = 6, col = 'black',size = 0.5,linetype ="dashed")+
+theme(text = element_text(size=14))+
+geom_text_contour(aes(z = R_DM_s), stroke = 0.1,breaks=1,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+geom_text_contour(aes(z = R_DM_s), stroke = 0.1,breaks=6,label.placer=label_placer_fraction(frac = 0.5, rot_adjuster = isoband::angle_halfcircle_bottom()))+
+theme(legend.position="none")
+
+# 2. Save the legend
+#+++++++++++++++++++++++
+legend <- get_legend(plot_1)
+# 3. Remove the legend 
+#+++++++++++++++++++++++
+plot_1 <- plot_1 + theme(legend.position="none")
+# 4. Arrange ggplot2 graphs with a specific width
+#plot_all <-grid.arrange(plot_1, plot_2, plot_3,  plot_4, ncol=2,widths=c(2.3, 2.3))
+#grid.arrange(plot_all, legend,ncol=2, widths=c(5, 1))
+
+plot_1
+plot_2
+plot_3
+grid.arrange(plot_4, legend,ncol=2, widths=c(5, 1.4))
+```
+
